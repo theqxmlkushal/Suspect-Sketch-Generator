@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Environment — NEVER commit real keys
+.env
+
+# VS Code
+.vscode/settings.json
+
+# Virtual env config — not portable
+pyvenv.cfg
+
+# Outputs
+outputs/
+*.png
+*.jpg
+
+# PyTest
+.pytest_cache/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
