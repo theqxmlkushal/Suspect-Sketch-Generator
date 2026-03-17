@@ -1,236 +1,594 @@
-# 🏗️ Suspect Sketch Generator - Project Architecture
+# 🕵️ Suspect Sketch Generator — Project Architecture
 
-## System Overview
+> **A forensic face portrait pipeline powered entirely by SDXL + LCM Scheduler.**
+> Text description in → validated JSON attributes → SDXL image out.
 
-The Suspect Sketch Generator is a three-tier system that converts text descriptions of suspects into forensic sketch portraits using AI. The pipeline combines NLP parsing, prompt engineering, and image generation.
+---
+
+## Table of Contents
+
+1. [System Overview](#1-system-overview)
+2. [Tech Stack](#2-tech-stack)
+3. [Directory Structure](#3-directory-structure)
+4. [Component Breakdown](#4-component-breakdown)
+5. [End-to-End Execution Flow](#5-end-to-end-execution-flow)
+6. [Data Flow Diagram](#6-data-flow-diagram)
+7. [SDXL + LCM Pipeline Deep Dive](#7-sdxl--lcm-pipeline-deep-dive)
+8. [API Contract](#8-api-contract)
+9. [State Management (Streamlit)](#9-state-management-streamlit)
+10. [Error Handling Strategy](#10-error-handling-strategy)
+11. [Testing Architecture](#11-testing-architecture)
+
+---
+
+## 1. System Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     USER INTERFACE LAYER                         │
-├─────────────────────────────────────────────────────────────────┤
-│  Streamlit UI (ui/app.py)                                        │
-│  ├─ Text input: suspect description                             │
-│  ├─ Parse button: extract attributes                            │
-│  ├─ Generate button: create sketch                              │
-│  └─ Display: show generated images with metadata                │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────────────┐
-│                   APPLICATION LAYER                              │
-├─────────────────────────────────────────────────────────────────┤
-│  FastAPI Backend (api/api.py)                                    │
-│  ├─ /health: system status check                                │
-│  ├─ /parse: extract attributes from description                 │
-│  └─ /generate: create forensic sketch                           │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────────────┐
-│                   PROCESSING LAYER                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                   │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ NLP Parser (nlp/nlp_parser.py)                           │   │
-│  │ ├─ Rule-based parsing: extract age, gender, features    │   │
-│  │ ├─ Groq/Llama-3 LLM: structured attribute extraction    │   │
-│  │ └─ Validation: ensure no hallucinated defaults          │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                         │                                        │
-│                         ▼                                        │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ Prompt Engineer (pipeline/prompt_engineer.py)            │   │
-│  │ ├─ Priority ordering: identity features first           │   │
-│  │ ├─ Emphasis weights: (scar:1.4) for key features        │   │
-│  │ ├─ Style tokens: forensic sketch aesthetic              │   │
-│  │ └─ Negative prompt: exclude unwanted elements           │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                         │                                        │
-│                         ▼                                        │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │ Generation Pipeline (pipeline/generation_pipeline.py)    │   │
-│  │ ├─ Backend selection: HF → Together → Pollinations      │   │
-│  │ ├─ Retry logic: 2 retries per backend on failure        │   │
-│  │ ├─ Face validation: MTCNN detection (optional)          │   │
-│  │ └─ Image processing: format & return results            │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                   │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────────────┐
-│                   EXTERNAL SERVICES                              │
-├─────────────────────────────────────────────────────────────────┤
-│  ├─ Groq API: LLM for attribute extraction                      │
-│  ├─ HuggingFace: SDXL image generation (optional)               │
-│  ├─ Together AI: FLUX image generation (optional)               │
-│  ├─ Pollinations.ai: Free fallback image generation             │
-│  └─ facenet-pytorch: Face detection & validation (optional)     │
-└─────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════╗
+║                     SUSPECT SKETCH GENERATOR v2.1                        ║
+║                                                                            ║
+║  ┌─────────────┐    ┌──────────────┐    ┌───────────────────────────┐    ║
+║  │   Streamlit  │    │  FastAPI     │    │   SDXL + LCM Scheduler    │    ║
+║  │   Frontend   │───▶│  REST Layer  │───▶│   Local Inference Engine  │    ║
+║  │  (ui/app.py) │    │ (api/api.py) │    │ (pipeline/generation_     │    ║
+║  └─────────────┘    └──────────────┘    │  pipeline.py)             │    ║
+║         │                  │            └───────────────────────────┘    ║
+║         │                  │                          │                   ║
+║         ▼                  ▼                          ▼                   ║
+║  ┌─────────────┐    ┌──────────────┐    ┌───────────────────────────┐    ║
+║  │  NLP Parser  │    │  Pydantic    │    │  Face Validation          │    ║
+║  │  + Groq LLM  │    │  Schemas     │    │  (MTCNN Detection)        │    ║
+║  │(nlp/nlp_     │    │(api/models.  │    └───────────────────────────┘    ║
+║  │ parser.py)   │    │ py)          │                                      ║
+║  └─────────────┘    └──────────────┘                                      ║
+║         │                                                                  ║
+║         ▼                                                                  ║
+║  ┌─────────────────────────┐                                               ║
+║  │   Prompt Engineer        │                                               ║
+║  │ (pipeline/prompt_        │                                               ║
+║  │  engineer.py)            │                                               ║
+║  └─────────────────────────┘                                               ║
+╚══════════════════════════════════════════════════════════════════════════╝
 ```
 
 ---
 
-## Component Details
+## 2. Tech Stack
 
-### 1. NLP Parser (`nlp/nlp_parser.py`)
+| Layer | Technology | Purpose |
+|---|---|---|
+| **Frontend** | Streamlit | Interactive UI, session state, image display |
+| **API** | FastAPI + Uvicorn | REST endpoints, request validation |
+| **NLP** | Groq (Llama-3) + rule-based | Convert text description → structured attributes |
+| **Image Generation** | SDXL Base 1.0 + LCM Scheduler | Local diffusion-based face generation |
+| **Face Validation** | facenet-pytorch (MTCNN) | Verify output contains a human face |
+| **Schemas** | Pydantic v2 | Typed request/response models |
+| **Testing** | pytest | Unit + integration tests |
+| **Task Runner** | Makefile | Dev workflow automation |
 
-**Purpose:** Extract structured attributes from unstructured text descriptions.
+---
 
-**Key Functions:**
-- `extract_attributes_rule_based()`: Fast regex-based parsing
-- `extract_attributes_groq()`: LLM-powered parsing with Groq/Llama-3
-- `extract_attributes()`: Wrapper that chooses parser based on `use_llm` flag
+## 3. Directory Structure
 
-**Attributes Extracted:**
-```python
-{
-  "age": int,                              # 18-100
-  "gender": str,                           # "male", "female", "other"
-  "ethnicity": str,                        # "white", "black", "asian", etc.
-  "hair_color": str,                       # "brown", "black", "blonde", etc.
-  "hair_style": str,                       # "short", "long", "curly", etc.
-  "eye_color": str,                        # "blue", "brown", "green", etc.
-  "face_shape": str,                       # "round", "square", "oval", etc.
-  "nose_shape": str,                       # "straight", "hooked", "bulbous", etc.
-  "build": str,                            # "slim", "average", "muscular", etc.
-  "skin_tone": str,                        # "light", "medium", "dark", etc.
-  "facial_hair": str,                      # "clean", "stubble", "beard", etc.
-  "distinguishing_features": list[str],    # ["scar on left cheek", "tattoo on neck"]
-  "glasses": bool,                         # true/false
-  "expression": str                        # "neutral", "angry", "sad", etc.
+```
+suspect-sketch-generator/
+│
+├── .env                        ← Runtime secrets (never commit)
+├── .env.example                ← Key template
+├── .gitignore
+├── requirements.txt            ← All Python dependencies
+├── Makefile                    ← Dev commands (install, run, test)
+├── README.md
+├── PROJECT_ARCHITECTURE.md     ← This file
+│
+├── nlp/
+│   ├── __init__.py
+│   └── nlp_parser.py           ← Groq LLM + regex fallback → JSON attributes
+│
+├── pipeline/
+│   ├── __init__.py
+│   ├── prompt_engineer.py      ← Attributes → SDXL prompt string
+│   └── generation_pipeline.py ← SDXL + LCM inference, retry logic
+│
+├── api/
+│   ├── __init__.py
+│   ├── api.py                  ← FastAPI app: /health /parse /generate
+│   └── models.py               ← Pydantic request/response schemas
+│
+├── ui/
+│   ├── __init__.py
+│   └── app.py                  ← Streamlit frontend, seed persistence
+│
+├── scripts/
+│   └── test_apis.py            ← Smoke test (run before full app)
+│
+└── tests/
+    ├── test_nlp_parser.py
+    ├── test_prompt_engineer.py
+    ├── test_bugfix_validate_faces.py
+    └── test_preservation_properties.py
+```
+
+---
+
+## 4. Component Breakdown
+
+### 4.1 NLP Parser (`nlp/nlp_parser.py`)
+
+Converts a raw English description into a validated JSON attribute object.
+
+```
+Input:  "White male, early 40s, square jaw, scar on left cheek"
+          │
+          ├─ Path A: Groq LLM (Llama-3-8b-8192)
+          │    └─ System prompt enforces: null for every unmentioned feature
+          │
+          └─ Path B: Rule-based regex fallback (no API key required)
+               ├─ Age parser: "40s" → 45, "early 30s" → 31, "mid 50s" → 53
+               ├─ Gender: male/female/non-binary
+               ├─ Physical attributes: jaw, hair, eyes, nose, lips, etc.
+               └─ Distinguishing features: scars, tattoos, piercings, etc.
+
+Output: {
+  "age": 41,
+  "gender": "male",
+  "ethnicity": "white",
+  "jaw_shape": "square",
+  "hair_color": null,       ← null = NOT mentioned, will not appear in prompt
+  "eye_color": null,
+  "distinguishing_features": ["scar on left cheek"],
+  ...
 }
 ```
 
-**Design Decisions:**
-- `null` for unmentioned features (no hallucination)
-- Age range parsing: "40s" → 45, "early 30s" → 31
-- Distinguishing features prioritized for identity
+**Key design rule:** Features not explicitly mentioned are set to `null`. They are never guessed from demographics or stereotypes. This prevents hallucinated traits from polluting the SDXL prompt.
 
 ---
 
-### 2. Prompt Engineer (`pipeline/prompt_engineer.py`)
+### 4.2 Prompt Engineer (`pipeline/prompt_engineer.py`)
 
-**Purpose:** Convert structured attributes into optimized SDXL/FLUX prompts.
+Converts the attribute JSON into a structured, priority-ordered SDXL prompt.
 
-**Key Functions:**
-- `build_forensic_prompt()`: Create positive + negative prompts
-- `_build_positive_prompt()`: Feature-ordered prompt with emphasis weights
-- `_build_negative_prompt()`: Exclude unwanted elements
-
-**Prompt Structure:**
 ```
-[Style anchor] [Distinguishing marks] [Demographics] [Face structure] 
-[Hair] [Eyes] [Nose/Lips] [Facial hair] [Skin tone] [Expression/Build]
-[Style suffix]
+Attribute priority order (highest → lowest identity impact):
+  1. Distinguishing marks    → (scar on left cheek:1.4)  [emphasis weight]
+  2. Demographics            → 41 year old male
+  3. Ethnicity               → white
+  4. Face structure          → square jawline
+  5. Hair                    → brown short hair
+  6. Eyes                    → blue eyes
+  7. Nose / lips             → only if non-default
+  8. Facial hair / glasses
+  9. Skin tone
+ 10. Expression / build      → only if non-neutral/average
+
+Prefix (always):
+  "close-up forensic pencil sketch portrait, face centered, white paper,"
+
+Suffix (≤12 words):
+  "graphite portrait, sharp pencil lines, law enforcement composite"
+
+Negative prompt:
+  "color, photograph, blurry, body, landscape, nsfw, cartoon"
 ```
 
-**Example Output:**
+**Example output:**
+
 ```
-Positive:
+POSITIVE:
 "close-up forensic pencil sketch portrait, face centered, white paper,
- (scar on left cheek:1.4), 42 year old male, square jawline, brown short hair,
- bushy eyebrows, stubble, light skin tone,
+ (scar on left cheek:1.4), 41 year old white male, square jawline,
  graphite portrait, sharp pencil lines, law enforcement composite"
 
-Negative:
-"color, photograph, blurry, abstract, landscape, multiple faces, 
- cartoon, painting, watercolor, low quality"
+NEGATIVE:
+"color, photograph, blurry, body, landscape, nsfw, cartoon, text, watermark"
 ```
-
-**Design Decisions:**
-- Emphasis weights: (feature:1.4) for distinguishing marks
-- Feature ordering: identity-critical features first
-- Suffix ≤12 words: prevents style tokens from drowning face details
-- Skip null/default values: no filler tokens
 
 ---
 
-### 3. Generation Pipeline (`pipeline/generation_pipeline.py`)
+### 4.3 Generation Pipeline (`pipeline/generation_pipeline.py`)
 
-**Purpose:** Generate images using multiple backends with fallback and validation.
+Runs the SDXL + LCM Scheduler locally to produce face images.
 
-**Key Functions:**
-- `generate_images()`: Main entry point
-- `_generate_pollinations()`: Free fallback backend
-- `_generate_hf()`: HuggingFace SDXL (requires HF_TOKEN)
-- `_generate_together()`: Together AI FLUX (requires TOGETHER_API_KEY)
-- `_has_face()`: MTCNN face detection for validation
-- `_with_retry()`: Retry wrapper for fault tolerance
-
-**Backend Selection Logic:**
 ```
-1. Try HuggingFace (if HF_TOKEN set)
-   └─ Retry 2× on failure
-2. Try Together AI (if TOGETHER_API_KEY set)
-   └─ Retry 2× on failure
-3. Fall back to Pollinations.ai (always available)
-   └─ Retry 2× on failure
-4. If all fail, return None
+┌─────────────────────────────────────────────────────────────┐
+│                  SDXL + LCM SCHEDULER PIPELINE               │
+│                                                               │
+│  Model load (first run only, ~5–8 GB VRAM or CPU offload):   │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │  stabilityai/stable-diffusion-xl-base-1.0             │   │
+│  │  Scheduler: LCMScheduler (latent consistency model)    │   │
+│  │  LoRA weights: latent-consistency/lcm-lora-sdxl        │   │
+│  └───────────────────────────────────────────────────────┘   │
+│                         │                                     │
+│                    Inference call                             │
+│                         │                                     │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │  Steps:       4–8  (LCM = ultra-fast, 4 steps ok)     │   │
+│  │  Guidance:    1.5–2.0 (LCM requires low CFG)          │   │
+│  │  Resolution:  1024×1024 (SDXL native)                 │   │
+│  │  Seed:        user-controlled (session_state)         │   │
+│  └───────────────────────────────────────────────────────┘   │
+│                         │                                     │
+│              Face validation (MTCNN)                         │
+│                         │                                     │
+│          ┌──────────────┴──────────────┐                     │
+│          │ face detected (≥0.85 conf)  │ no face detected    │
+│          ▼                             ▼                     │
+│       return image               retry with new seed         │
+│                                  (max 2 retries)             │
+└─────────────────────────────────────────────────────────────┘
 ```
-
-**Face Validation:**
-- Uses MTCNN (Multi-task Cascaded Convolutional Networks)
-- Confidence threshold: 0.85
-- If face not detected: retry with different seed
-- If facenet-pytorch not installed: skip validation (accept all images)
-
-**Design Decisions:**
-- Retry logic: 2 retries per backend (handles transient failures)
-- Fallback chain: ensures generation always succeeds if any backend works
-- Face validation: optional but recommended for quality assurance
-- Seed control: enables reproducible results
 
 ---
 
-### 4. Streamlit UI (`ui/app.py`)
+### 4.4 FastAPI Layer (`api/api.py` + `api/models.py`)
 
-**Purpose:** User-friendly interface for description input and image display.
-
-**Key Features:**
-- **Parse Only**: Extract attributes without generating images
-- **Generate**: Create forensic sketches with optional face validation
-- **Seed Control**: Reproducible results with "New variation" button
-- **Session State**: Persistent seed across reruns
-- **Status Display**: Show which API keys are configured
-
-**UI Flow:**
 ```
-1. User enters suspect description
-2. Click "Parse only" → Display extracted attributes
-3. Click "Generate sketch" → Create images
-4. Click "New variation" → Generate with new seed
-5. Display images with metadata (seed, generation time, etc.)
-```
+Endpoints:
 
-**Design Decisions:**
-- Session state for seed persistence (survives reruns)
-- Spinner feedback during generation
-- Face validation toggle (optional)
-- Error handling with user-friendly messages
+  GET  /health    → system status, model loaded flag, face validation available
+  POST /parse     → run NLP parser only, return attribute JSON
+  POST /generate  → full pipeline: parse → prompt → SDXL → validate → return images
+
+Error codes:
+  200 → success
+  422 → invalid input (Pydantic validation failed)
+  503 → generation failed after all retries
+  500 → unexpected server error
+```
 
 ---
 
-### 5. FastAPI Backend (`api/api.py`)
+### 4.5 Streamlit Frontend (`ui/app.py`)
 
-**Purpose:** REST API for programmatic access to parsing and generation.
+```
+Page layout:
+  ┌──────────────────────────────────────────────────────┐
+  │  🕵️ AI Suspect Sketch Generator                       │
+  │                                                        │
+  │  [Text area: Enter suspect description...]            │
+  │                                                        │
+  │  Style: [forensic_sketch ▼]   Images: [2 ▼]          │
+  │                                                        │
+  │  [Parse only]          [Generate sketch]              │
+  │                                                        │
+  │  ┌───────────┐  ┌───────────┐                        │
+  │  │  Image 1  │  │  Image 2  │                        │
+  │  └───────────┘  └───────────┘                        │
+  │                                                        │
+  │  Seed: 12345     [New variation]                      │
+  │                                                        │
+  │  Parsed attributes:                                    │
+  │  age=41, gender=male, jaw_shape=square, ...           │
+  └──────────────────────────────────────────────────────┘
 
-**Endpoints:**
+Session state keys:
+  seed        → integer, persists across reruns
+  pipe_loaded → bool, True after SDXL model is in memory
+  last_attrs  → dict, last parsed attribute set
+```
 
-#### `GET /health`
-Returns system status and available backends.
+---
 
-#### `POST /parse`
-Extract attributes from description.
+## 5. End-to-End Execution Flow
+
+### 5.1 First-Ever Run (Cold Start)
+
+```
+$ git clone https://github.com/theqxmlkushal/Suspect-Sketch-Generator.git
+$ cd Suspect-Sketch-Generator
+$ python -m venv venv && source venv/bin/activate
+$ pip install -r requirements.txt
+$ pip install facenet-pytorch
+$ cp .env.example .env         ← add your GROQ_API_KEY here
+$ streamlit run ui/app.py
+```
+
+```
+BOOT SEQUENCE
+═════════════
+
+[1] Python process starts
+     └─ Streamlit loads ui/app.py
+          └─ load_dotenv() reads .env → GROQ_API_KEY into environment
+          └─ session_state initialised:
+               seed        = random.randint(1, 99_999)
+               pipe_loaded = False
+
+[2] SDXL model load (runs once, ~30–90 seconds on first launch)
+     └─ from_pretrained("stabilityai/stable-diffusion-xl-base-1.0")
+     └─ load_lora_weights("latent-consistency/lcm-lora-sdxl")
+     └─ scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+     └─ pipe.to("cuda")  [or "cpu" if no GPU]
+     └─ session_state.pipe_loaded = True
+
+[3] UI renders — user sees "Ready" status
+```
+
+### 5.2 Typical Generation Request
+
+```
+USER TYPES: "White male, early 40s, square jaw, scar on left cheek"
+USER CLICKS: "Generate sketch"
+
+Step 1 — NLP PARSING
+─────────────────────
+  ui/app.py calls nlp_parser.extract_attributes(description, use_llm=True)
+       │
+       ├─ POST to Groq API (Llama-3-8b-8192)
+       │    └─ System prompt: "Return ONLY JSON. Set null for unmentioned features."
+       │    └─ Response parsed and validated against attribute schema
+       │
+       └─ If Groq unavailable → rule_based_fallback(description)
+            └─ Regex extracts: age="early 40s"→41, gender="male", etc.
+
+  Result: {age:41, gender:"male", ethnicity:"white",
+           jaw_shape:"square", distinguishing_features:["scar on left cheek"],
+           hair_color:null, eye_color:null, ...}
+
+Step 2 — PROMPT ENGINEERING
+─────────────────────────────
+  build_forensic_prompt(attrs, style="forensic_sketch")
+       │
+       └─ Filter: skip all null + default-value attributes
+       └─ Sort by priority: distinguishing marks first, demographics second
+       └─ Apply emphasis: "(scar on left cheek:1.4)"
+       └─ Prepend anchor: "close-up forensic pencil sketch portrait..."
+       └─ Append ≤12-word style suffix
+
+  Positive: "close-up forensic pencil sketch portrait, face centered, white paper,
+             (scar on left cheek:1.4), 41 year old white male, square jawline,
+             graphite portrait, sharp pencil lines, law enforcement composite"
+
+  Negative: "color, photograph, blurry, body, landscape, nsfw, cartoon, watermark"
+
+Step 3 — SDXL GENERATION
+─────────────────────────
+  generate_images(prompt, negative_prompt, seed=12345, num_images=2)
+       │
+       ├─ torch.manual_seed(12345)
+       ├─ pipe(
+       │    prompt=...,
+       │    negative_prompt=...,
+       │    num_inference_steps=4,      ← LCM: 4 steps is sufficient
+       │    guidance_scale=1.5,         ← LCM: must be low (1.0–2.0)
+       │    width=1024, height=1024,
+       │    num_images_per_prompt=2,
+       │    generator=torch.Generator().manual_seed(12345)
+       │  )
+       └─ Returns list of PIL Images
+
+Step 4 — FACE VALIDATION
+──────────────────────────
+  For each image:
+       └─ MTCNN(image) → boxes, probabilities
+            ├─ prob ≥ 0.85 → ✅ keep image
+            └─ prob < 0.85 or no face → ❌ retry with seed+1
+
+Step 5 — DISPLAY
+──────────────────
+  Streamlit renders validated images side-by-side
+  Parsed attributes shown below in expandable section
+  Seed displayed with "New variation" button
+```
+
+### 5.3 "New Variation" Click
+
+```
+User clicks [New variation]
+     └─ session_state.seed = random.randint(1, 99_999)
+     └─ st.rerun()
+     └─ Same description + same parsed attributes
+     └─ Different seed → different face sampling path
+     └─ Steps 3–5 repeat with new seed
+```
+
+---
+
+## 6. Data Flow Diagram
+
+```
+                        ┌──────────────────────────┐
+                        │     USER INPUT            │
+                        │  "White male, 40s,        │
+                        │   square jaw, scar..."    │
+                        └────────────┬─────────────┘
+                                     │
+                                     ▼
+                        ┌──────────────────────────┐
+                        │   NLP PARSER              │
+                        │   nlp/nlp_parser.py       │
+                        │                           │
+                        │  Groq LLM (primary)       │
+                        │       ↓                   │
+                        │  Rule-based (fallback)    │
+                        └────────────┬─────────────┘
+                                     │
+                          Validated JSON attributes
+                          {age, gender, jaw_shape,
+                           distinguishing_features...}
+                                     │
+                                     ▼
+                        ┌──────────────────────────┐
+                        │   PROMPT ENGINEER         │
+                        │  pipeline/prompt_         │
+                        │  engineer.py              │
+                        │                           │
+                        │  Priority sort            │
+                        │  Null filtering           │
+                        │  Emphasis weighting       │
+                        └────────────┬─────────────┘
+                                     │
+                           SDXL prompt string
+                           + negative prompt
+                                     │
+                                     ▼
+                        ┌──────────────────────────┐
+                        │   SDXL + LCM PIPELINE     │
+                        │  pipeline/generation_     │
+                        │  pipeline.py              │
+                        │                           │
+                        │  SDXL Base 1.0            │
+                        │  + LCM LoRA               │
+                        │  LCMScheduler             │
+                        │  4 steps / CFG 1.5        │
+                        └────────────┬─────────────┘
+                                     │
+                                PIL Image(s)
+                                     │
+                                     ▼
+                        ┌──────────────────────────┐
+                        │   FACE VALIDATION         │
+                        │  facenet-pytorch MTCNN    │
+                        │                           │
+                        │  conf ≥ 0.85 → pass       │
+                        │  conf < 0.85 → retry      │
+                        └────────────┬─────────────┘
+                                     │
+                          Validated face image(s)
+                                     │
+                                     ▼
+                        ┌──────────────────────────┐
+                        │   STREAMLIT UI            │
+                        │   ui/app.py               │
+                        │                           │
+                        │  Display images           │
+                        │  Show attributes          │
+                        │  Seed control             │
+                        └──────────────────────────┘
+```
+
+---
+
+## 7. SDXL + LCM Pipeline Deep Dive
+
+### Why LCM?
+
+Standard SDXL requires 25–50 denoising steps and 5–10 seconds per image on a good GPU.
+
+LCM (Latent Consistency Model) + LCM-LoRA reduces this to **4 steps** with comparable quality — roughly **4–10× faster**. This makes iterative forensic use practical (witness can give real-time feedback).
+
+### How LCM-LoRA integrates with SDXL
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Standard SDXL                   SDXL + LCM-LoRA               │
+│  ────────────                    ──────────────                 │
+│  Scheduler: DDIM/DPM++           Scheduler: LCMScheduler       │
+│  Steps:     25–50                Steps:     4–8                 │
+│  CFG scale: 7.0–9.0              CFG scale: 1.0–2.0             │
+│  Time/img:  8–15s (GPU)          Time/img:  1–3s (GPU)          │
+│                                                                   │
+│  LoRA adds consistency distillation weights on top of the       │
+│  base SDXL UNet. No separate model download needed.             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Model initialization code pattern
+
+```python
+from diffusers import StableDiffusionXLPipeline, LCMScheduler
+import torch
+
+pipe = StableDiffusionXLPipeline.from_pretrained(
+    "stabilityai/stable-diffusion-xl-base-1.0",
+    torch_dtype=torch.float16,
+    variant="fp16",
+)
+pipe.load_lora_weights("latent-consistency/lcm-lora-sdxl")
+pipe.scheduler = LCMScheduler.from_config(pipe.scheduler.config)
+pipe.to("cuda")   # or "mps" on Apple Silicon, "cpu" as last resort
+```
+
+### Inference call pattern
+
+```python
+generator = torch.Generator(device="cuda").manual_seed(seed)
+
+result = pipe(
+    prompt=positive_prompt,
+    negative_prompt=negative_prompt,
+    num_inference_steps=4,      # LCM works best at 4-8
+    guidance_scale=1.5,         # Must be low for LCM
+    width=1024,
+    height=1024,
+    num_images_per_prompt=num_images,
+    generator=generator,
+)
+images = result.images   # List[PIL.Image]
+```
+
+### LCM Step-by-Step Denoising (4 steps visualised)
+
+```
+Random noise (t=1000)
+       │
+       ▼  [Step 1 — LCM leap]  ~75% of denoising done here
+  Rough face shape visible
+       │
+       ▼  [Step 2]  Facial structure solidified
+  Jaw line, brow, nose visible
+       │
+       ▼  [Step 3]  Fine features appear
+  Eyes, lips, skin texture
+       │
+       ▼  [Step 4]  Final polish
+  Sharp edges, shading complete
+       │
+       ▼
+  Final 1024×1024 image
+```
+
+---
+
+## 8. API Contract
+
+### `GET /health`
+
 ```json
 {
-  "description": "White male, early 40s, square jaw",
+  "status": "ok",
+  "groq_key_set": true,
+  "model_loaded": true,
+  "face_validation_available": true,
+  "styles_available": ["forensic_sketch", "photorealistic", "composite"]
+}
+```
+
+### `POST /parse`
+
+**Request:**
+```json
+{
+  "description": "White male, early 40s, square jaw, scar on left cheek",
   "use_llm": true
 }
 ```
 
-#### `POST /generate`
-Generate forensic sketch.
+**Response:**
 ```json
 {
-  "description": "White male, early 40s, square jaw",
+  "attributes": {
+    "age": 41,
+    "gender": "male",
+    "ethnicity": "white",
+    "jaw_shape": "square",
+    "distinguishing_features": ["scar on left cheek"],
+    "hair_color": null,
+    "eye_color": null
+  },
+  "parser_used": "groq_llama3",
+  "non_null_count": 5
+}
+```
+
+### `POST /generate`
+
+**Request:**
+```json
+{
+  "description": "White male, early 40s, square jaw, scar on left cheek",
   "style": "forensic_sketch",
   "num_images": 2,
   "seed": 42,
@@ -239,178 +597,148 @@ Generate forensic sketch.
 }
 ```
 
-**Design Decisions:**
-- Pydantic models for request/response validation
-- Proper HTTP status codes (422 for bad input, 503 for backend failure)
-- Base64 encoding for image responses
-- Metadata included (generation time, backends tried, etc.)
+**Response:**
+```json
+{
+  "images": ["base64...", "base64..."],
+  "images_generated": 2,
+  "attributes": { "...": "..." },
+  "prompt": "close-up forensic pencil sketch portrait...",
+  "negative_prompt": "color, photograph, blurry...",
+  "generation_time_seconds": 3.2,
+  "seed_used": 42
+}
+```
+
+**Error codes:**
+
+| Code | Meaning |
+|---|---|
+| 200 | Success |
+| 422 | Invalid input (Pydantic validation) |
+| 503 | SDXL generation failed after retries |
+| 500 | Unexpected server error |
 
 ---
 
-## Data Flow
+## 9. State Management (Streamlit)
 
-### Parsing Flow
-```
-User Description
-    ↓
-[NLP Parser]
-├─ Rule-based: Fast, no API calls
-└─ LLM-based: Slower, more accurate
-    ↓
-Structured Attributes (JSON)
-    ↓
-[Validation]
-├─ Check required fields
-└─ Ensure no hallucinated defaults
-    ↓
-Validated Attributes
-```
+Streamlit reruns the entire script on every user interaction. Without explicit state management, the seed would change on every click, making iterative refinement impossible.
 
-### Generation Flow
 ```
-Validated Attributes
-    ↓
-[Prompt Engineer]
-├─ Build positive prompt (features + style)
-└─ Build negative prompt (exclusions)
-    ↓
-Prompts (positive + negative)
-    ↓
-[Generation Pipeline]
-├─ Try HuggingFace
-├─ Try Together AI
-└─ Fall back to Pollinations
-    ↓
-Generated Image
-    ↓
-[Face Validation] (optional)
-├─ Detect face with MTCNN
-└─ Retry if no face found
-    ↓
-Final Image
+session_state lifecycle:
+
+  App boot
+    └─ st.session_state.setdefault("seed", random.randint(1, 99_999))
+    └─ st.session_state.setdefault("pipe_loaded", False)
+    └─ st.session_state.setdefault("last_attrs", {})
+
+  User clicks "Generate"
+    └─ seed read from session_state  ← same as last run
+    └─ images generated with that seed
+
+  User clicks "New variation"
+    └─ session_state.seed = random.randint(1, 99_999)  ← only now does seed change
+    └─ st.rerun()
+
+  User changes description
+    └─ session_state.seed unchanged  ← same face structure, different features
 ```
 
 ---
 
-## Technology Stack
+## 10. Error Handling Strategy
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **UI** | Streamlit | Web interface |
-| **API** | FastAPI | REST backend |
-| **NLP** | Groq/Llama-3 | LLM parsing |
-| **Image Gen** | SDXL, FLUX | Diffusion models |
-| **Face Detection** | facenet-pytorch (MTCNN) | Validation |
-| **Testing** | pytest, Hypothesis | Quality assurance |
-
----
-
-## Configuration
-
-### Environment Variables (`.env`)
 ```
-GROQ_API_KEY=gsk_...              # Required for LLM parsing
-HF_TOKEN=hf_...                   # Optional for HuggingFace backend
-TOGETHER_API_KEY=...              # Optional for Together AI backend
+Layer           Error type              Handler
+──────────────────────────────────────────────────────────
+NLP Parser      Groq API timeout        → fallback to rule-based regex
+NLP Parser      JSON parse failure      → fallback to rule-based regex
+NLP Parser      All-null result         → raise ValueError("no attributes found")
+
+Prompt Eng.     All attrs null          → return minimal anchor prompt only
+
+Generation      SDXL OOM (GPU)          → switch to CPU offload, retry
+Generation      No face detected        → increment seed by 1, retry (max 2×)
+Generation      Generation timeout      → retry same call (max 2×, 1.5s delay)
+Generation      All retries exhausted   → raise RuntimeError → API returns 503
+
+FastAPI         Pydantic mismatch       → 422 with field-level error detail
+FastAPI         Unhandled exception     → 500 with sanitised message (no stack trace)
+
+Streamlit       pipe not loaded yet     → spinner + "Initialising model..."
+Streamlit       generation error        → st.error() with human-readable message
 ```
 
-### Feature Flags
-- `use_llm`: Enable LLM-based parsing (slower, more accurate)
-- `validate_faces`: Enable face validation (requires facenet-pytorch)
-- `num_images`: Number of images to generate (1-4)
-
 ---
 
-## Error Handling
+## 11. Testing Architecture
 
-| Error | Cause | Resolution |
-|-------|-------|-----------|
-| `NameError: validate_faces` | Bug in UI generation | Fixed in v2.1 |
-| `GROQ_API_KEY not set` | Missing API key | Set in `.env` |
-| `Generation timeout` | Backend slow/down | Retry logic handles this |
-| `No face detected` | Image doesn't contain face | Retry with different seed |
-| `Abstract/landscape image` | Pollinations busy | Face validation rejects these |
+```
+tests/
+├── test_nlp_parser.py
+│    ├── test_age_decade_parsing()       "40s" → 45, "early 30s" → 31
+│    ├── test_null_for_unmentioned()     hair_color=null when not in input
+│    ├── test_distinguishing_features()  scar/tattoo/piercing extraction
+│    └── test_groq_vs_rulebased_parity() both paths return same schema shape
+│
+├── test_prompt_engineer.py
+│    ├── test_priority_ordering()        distinguishing marks first
+│    ├── test_null_skipped()             null attrs absent from prompt
+│    ├── test_emphasis_weights()         (scar:1.4) format correct
+│    └── test_suffix_length()           style suffix ≤ 12 words
+│
+├── test_bugfix_validate_faces.py
+│    ├── test_mtcnn_accepts_real_face()
+│    └── test_mtcnn_rejects_landscape()
+│
+└── test_preservation_properties.py
+     ├── test_seed_reproducibility()    same seed → same image hash
+     └── test_variation_differs()       different seed → different output
+```
 
----
-
-## Performance Characteristics
-
-| Operation | Time | Notes |
-|-----------|------|-------|
-| Rule-based parsing | <100ms | No API calls |
-| LLM parsing | 1-3s | Groq API call |
-| Image generation | 10-30s | Depends on backend |
-| Face validation | 1-2s | Per image |
-| **Total (UI)** | 15-40s | Parse + generate + validate |
-
----
-
-## Future Improvements
-
-1. **ControlNet Integration**: Use reference sketches for structure guidance
-2. **Iterative Refinement**: Adjust one attribute at a time
-3. **CUFS Fine-tuning**: LoRA training on forensic sketch dataset
-4. **ArcFace Scoring**: Measure similarity to reference photos
-5. **Batch Processing**: Generate multiple suspects in parallel
-6. **Caching**: Cache parsed attributes and generated images
-
----
-
-## Testing Strategy
-
-### Unit Tests
-- `tests/test_nlp_parser.py`: Attribute extraction
-- `tests/test_prompt_engineer.py`: Prompt generation
-- `tests/test_bugfix_validate_faces.py`: Bug condition verification
-
-### Integration Tests
-- `scripts/test_apis.py`: End-to-end backend smoke test
-
-### Property-Based Tests
-- `tests/test_preservation_properties.py`: Regression prevention
-
----
-
-## Deployment
-
-### Local Development
+Run all tests:
 ```bash
-streamlit run ui/app.py
-```
-
-### Production API
-```bash
-uvicorn api.api:app --host 0.0.0.0 --port 8000
-```
-
-### Docker (Future)
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["streamlit", "run", "ui/app.py"]
+make test
+# or
+pytest tests/ -v
 ```
 
 ---
 
-## Maintenance
+## Quick Reference — Makefile Commands
 
-### Adding a New Backend
-1. Create function in `pipeline/generation_pipeline.py`
-2. Add to backend selection logic
-3. Update `/health` endpoint
-4. Add tests in `tests/`
+```
+make install       pip install -r requirements.txt
+make run-ui        streamlit run ui/app.py → http://localhost:8501
+make run-api       uvicorn api.api:app --reload → http://localhost:8000/docs
+make test          pytest tests/ -v
+make smoke         quick end-to-end check (no API keys needed)
+make lint          syntax check all Python files
+make clean         remove __pycache__ directories
+```
 
-### Adding a New Attribute
-1. Update `nlp/nlp_parser.py` extraction logic
-2. Update `api/models.py` Pydantic schema
-3. Update `pipeline/prompt_engineer.py` prompt building
-4. Add tests
+---
 
-### Updating Prompts
-1. Modify `pipeline/prompt_engineer.py`
-2. Test with `scripts/test_apis.py`
-3. Verify face validation still works
+## Environment Variables
 
+```bash
+# .env.example
+
+# Required — NLP parsing
+GROQ_API_KEY=gsk_...         # Free at console.groq.com
+
+# Optional — Override SDXL model path (defaults to HuggingFace cache)
+SDXL_MODEL_PATH=./models/sdxl-base-1.0
+
+# Optional — Generation defaults
+DEFAULT_NUM_STEPS=4
+DEFAULT_GUIDANCE_SCALE=1.5
+DEFAULT_RESOLUTION=1024
+```
+
+> **Note:** Image generation runs entirely locally via SDXL + LCM Scheduler. No external image API keys are required or used.
+
+---
+
+*Architecture document for Suspect Sketch Generator v2.1 — SDXL + LCM Scheduler edition.*
