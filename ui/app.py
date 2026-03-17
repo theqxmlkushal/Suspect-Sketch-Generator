@@ -29,9 +29,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
 
+# Set HuggingFace cache directory to D drive to save C drive space
+os.environ["HF_HOME"] = "D:\\AI Suspect Sketch Generator\\hf_cache"
+
 from nlp.nlp_parser import extract_attributes
 from pipeline.prompt_engineer import build_forensic_prompt, STYLE_PRESETS
-from pipeline.generation_pipeline import generate_images, FACE_VALIDATION_AVAILABLE
+from pipeline.generation_pipeline import SuspectSketchPipeline, FACE_VALIDATION_AVAILABLE
 
 
 # ── Page config ────────────────────────────────────────────────────────────
@@ -70,12 +73,16 @@ def _init_state():
         "prompt":      "",          # last built prompt
         "last_desc":   "",          # description that produced current images
         "generating":  False,
+        "pipe_loaded": False,
     }
     for k, v in defaults.items():
         st.session_state.setdefault(k, v)
 
 _init_state()
 
+@st.cache_resource
+def get_pipeline():
+    return SuspectSketchPipeline(enable_cpu_offload=False, use_fp16=True)
 
 # ── Sidebar — configuration & status ──────────────────────────────────────
 with st.sidebar:
@@ -103,9 +110,7 @@ with st.sidebar:
         icon = "🟢" if has_key else "🔴"
         st.markdown(f"{icon} **{label}**" + (f"  \n`{note}`" if note else ""))
 
-    _status("HuggingFace FLUX", bool(os.getenv("HF_TOKEN")),   "HF_TOKEN in .env")
-    _status("Together AI",      bool(os.getenv("TOGETHER_API_KEY")), "TOGETHER_API_KEY in .env")
-    _status("Pollinations.ai",  True,  "free, always available")
+    _status("Local SDXL + LCM", True, "Using local GPU")
     _status("Groq / Llama-3",   bool(os.getenv("GROQ_API_KEY")), "GROQ_API_KEY in .env")
 
     if not FACE_VALIDATION_AVAILABLE:
@@ -204,16 +209,37 @@ with col_right:
             prompt, _ = build_forensic_prompt(attrs, style=style)
             st.session_state.prompt = prompt
 
-            with st.spinner(f"🎨 Generating {num_images} image(s) via FLUX… (~15-30s)"):
+            with st.spinner(f"🎨 Generating {num_images} image(s) via Local SDXL + LCM... (~few seconds)"):
                 try:
-                    imgs = generate_images(
+                    pipe = get_pipeline()
+                    # Ensure the model is loaded
+                    if not pipe.is_loaded:
+                        with st.spinner("⏳ Loading SDXL + LCM model into VRAM... (First run only)"):
+                            pipe.load()
+                            st.session_state.pipe_loaded = True
+                            
+                    imgs = pipe.generate(
                         prompt=prompt,
                         num_images=num_images,
                         seed=st.session_state.seed,
-                        validate_faces=val_faces,
+                        width=1024,
+                        height=1024,
+                        num_inference_steps=6,
+                        guidance_scale=1.5
                     )
+                    
+                    if val_faces and FACE_VALIDATION_AVAILABLE:
+                        from pipeline.generation_pipeline import _has_face
+                        valid_imgs = []
+                        for i, img in enumerate(imgs):
+                            if _has_face(img):
+                                valid_imgs.append(img)
+                            else:
+                                print(f"  [validate] Image {i+1}: no face detected. Dropped.")
+                        imgs = valid_imgs
+                        
                     if not imgs:
-                        st.error("No images returned. All backends may be busy — try again in a moment.")
+                        st.error("Generated images failed face validation. Try a different seed.")
                     else:
                         st.session_state.images    = imgs
                         st.session_state.last_desc = description
@@ -281,8 +307,7 @@ with col_right:
 st.markdown("---")
 st.markdown(
     "<div style='text-align:center;color:#94a3b8;font-size:0.75rem'>"
-    "AI Suspect Sketch Generator v2.1 · FLUX (Pollinations/HF/Together) + Groq Llama-3 · "
-    "For research and education only"
+    "AI Suspect Sketch Generator · Local SDXL + LCM + Groq Llama-3 · "
     "</div>",
     unsafe_allow_html=True,
 )

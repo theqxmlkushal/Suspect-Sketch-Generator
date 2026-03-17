@@ -5,6 +5,124 @@
 
 ---
 
+## 🚀 Quick Start (30 seconds)
+
+```bash
+# 1. Clone and setup
+git clone https://github.com/theqxmlkushal/Suspect-Sketch-Generator.git
+cd Suspect-Sketch-Generator
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+pip install facenet-pytorch  # Optional but recommended
+
+# 3. Configure API keys
+cp .env.example .env
+# Edit .env and add your GROQ_API_KEY (free at console.groq.com)
+
+# 4. Run the app
+streamlit run ui/app.py
+# → Open http://localhost:8501
+```
+
+---
+
+## 📊 Execution Flow
+
+### From Scratch (First Run)
+
+```
+1. User opens http://localhost:8501
+   ↓
+2. Streamlit loads ui/app.py
+   ├─ Initialize session state (seed, pipe_loaded)
+   ├─ Load environment variables
+   └─ Display status (API keys configured, face validation available)
+   ↓
+3. User enters description: "White male, 40s, square jaw, scar on left cheek"
+   ↓
+4. User clicks "Parse only" (optional)
+   ├─ NLP Parser extracts attributes
+   ├─ Display: age=42, gender=male, jaw_shape=square, etc.
+   └─ User can review before generating
+   ↓
+5. User clicks "Generate sketch"
+   ├─ Prompt Engineer builds SDXL prompt
+   ├─ Generation Pipeline tries backends:
+   │  ├─ HuggingFace (if HF_TOKEN set)
+   │  ├─ Together AI (if TOGETHER_API_KEY set)
+   │  └─ Pollinations.ai (free fallback)
+   ├─ Face Validation checks for detected face
+   └─ Display: 1-4 forensic sketches
+   ↓
+6. User clicks "New variation"
+   ├─ Generate new seed
+   └─ Regenerate with same description
+```
+
+### Typical Session
+
+```
+Session Start
+    ↓
+[Parse] → Display attributes
+    ↓
+[Generate] → Display images (seed=12345)
+    ↓
+[New Variation] → Display images (seed=67890)
+    ↓
+[New Variation] → Display images (seed=54321)
+    ↓
+Session End
+```
+
+### API Usage
+
+```bash
+# 1. Parse description
+curl -X POST http://localhost:8000/parse \
+  -H "Content-Type: application/json" \
+  -d '{"description": "White male, 40s, square jaw", "use_llm": true}'
+
+# 2. Generate sketch
+curl -X POST http://localhost:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "White male, 40s, square jaw",
+    "num_images": 2,
+    "seed": 42,
+    "validate_faces": true
+  }' > response.json
+
+# 3. Check health
+curl http://localhost:8000/health
+```
+
+---
+
+## 🏗️ Project Architecture
+
+See [PROJECT_ARCHITECTURE.md](PROJECT_ARCHITECTURE.md) for detailed system design, component descriptions, and data flow diagrams.
+
+**Quick Overview:**
+```
+User Input (Streamlit)
+    ↓
+NLP Parser (extract attributes)
+    ↓
+Prompt Engineer (build SDXL prompt)
+    ↓
+Generation Pipeline (SDXL/FLUX/Pollinations)
+    ↓
+Face Validation (MTCNN detection)
+    ↓
+Display Results
+```
+
+---
+
 ## What changed from v2.0 (and why your output was wrong)
 
 | File | Root cause fixed |
@@ -23,12 +141,14 @@
 ## Project structure
 
 ```
-suspect-sketch-ai/
+suspect-sketch-generator/
 ├── .env                    ← your API keys (never commit this)
 ├── .env.example            ← template
 ├── .gitignore
 ├── requirements.txt
 ├── Makefile
+├── README.md               ← this file
+├── PROJECT_ARCHITECTURE.md ← detailed system design
 │
 ├── nlp/
 │   ├── __init__.py
@@ -48,12 +168,11 @@ suspect-sketch-ai/
 │   ├── __init__.py
 │   └── app.py              ← Streamlit frontend with seed persistence
 │
-├── tests/
-│   ├── test_nlp_parser.py
-│   └── test_prompt_engineer.py
-│
-└── scripts/
-    └── test_apis.py        ← end-to-end backend smoke test
+└── tests/
+    ├── test_nlp_parser.py
+    ├── test_prompt_engineer.py
+    ├── test_bugfix_validate_faces.py
+    └── test_preservation_properties.py
 ```
 
 ---

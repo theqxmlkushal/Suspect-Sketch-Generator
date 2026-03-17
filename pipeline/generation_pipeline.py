@@ -148,6 +148,13 @@ def _with_retry(fn, name: str, retries: int = MAX_RETRIES) -> Image.Image | None
             return img
         except Exception as e:
             print(f"  [{name}] Attempt {attempt}/{retries} failed: {e}")
+            
+            # Fail fast on auth/payment errors instead of retrying
+            if hasattr(e, 'response') and e.response is not None:
+                if getattr(e.response, 'status_code', 0) in (401, 402, 403):
+                    print(f"  [{name}] Fatal auth/payment error (HTTP {e.response.status_code}). Skipping retries.")
+                    break
+                    
             if attempt < retries:
                 time.sleep(RETRY_DELAY)
     return None
@@ -185,6 +192,12 @@ def generate_images(
     """
     hf_token    = os.getenv("HF_TOKEN", "").strip()
     together_key = os.getenv("TOGETHER_API_KEY", "").strip()
+
+    # Ignore placeholder keys from .env.example
+    if together_key == "your_together_key_here":
+        together_key = ""
+    if hf_token == "hf_your_token_here":
+        hf_token = ""
 
     images: List[Image.Image] = []
 

@@ -24,6 +24,10 @@ outputs/
 .pytest_cache/
 .coverage
 
+# Kiro spec files (development only)
+.kiro/
+.hypothesis/
+
 # OS
 .DS_Store
 Thumbs.db
