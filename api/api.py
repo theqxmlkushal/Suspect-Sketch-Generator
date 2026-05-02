@@ -56,7 +56,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI Suspect Sketch Generator",
-    description="Text description → forensic face portrait via FLUX + Groq",
+    description="Text description -> forensic face portrait via FLUX + Groq",
     version="2.1.0",
     lifespan=lifespan,
 )

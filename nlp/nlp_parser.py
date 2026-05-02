@@ -172,12 +172,12 @@ def extract_attributes_groq(description: str) -> dict:
     try:
         from groq import Groq
     except ImportError:
-        print("[Groq] package not installed. pip install groq  → using rule-based")
+        print("[Groq] package not installed. pip install groq  -> using rule-based")
         return extract_attributes_rule_based(description)
 
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     if not api_key:
-        print("[Groq] GROQ_API_KEY missing in .env → using rule-based")
+        print("[Groq] GROQ_API_KEY missing in .env -> using rule-based")
         return extract_attributes_rule_based(description)
 
     try:
@@ -198,10 +198,10 @@ def extract_attributes_groq(description: str) -> dict:
         return _validate_attrs(parsed)
 
     except json.JSONDecodeError as e:
-        print(f"[Groq] JSON parse error: {e} → using rule-based")
+        print(f"[Groq] JSON parse error: {e} -> using rule-based")
         return extract_attributes_rule_based(description)
     except Exception as e:
-        print(f"[Groq] API error: {e} → using rule-based")
+        print(f"[Groq] API error: {e} -> using rule-based")
         return extract_attributes_rule_based(description)
 
 

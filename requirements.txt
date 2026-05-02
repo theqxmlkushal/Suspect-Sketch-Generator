@@ -39,3 +39,6 @@ transformers>=5.0.0
 accelerate>=1.0.0
 peft>=0.15.0
 safetensors>=0.4.0
+
+# Evaluation / model comparison
+scipy>=1.12.0

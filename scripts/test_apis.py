@@ -127,7 +127,7 @@ if FACE_VALIDATION_AVAILABLE:
     blank = Image.new("RGB", (512, 512), color=(200, 180, 160))
     result = _has_face(blank)
     _print_result("Face detection available", True,
-                  f"blank image → face detected: {result}")
+                  f"blank image -> face detected: {result}")
 else:
     print("  [SKIP] facenet-pytorch not installed  (pip install facenet-pytorch)")
 

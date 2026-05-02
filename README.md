@@ -138,6 +138,22 @@ Display Results
 
 ---
 
+## Why we switched: Diffusion Models vs. cGAN (Phase 2 Legacy)
+
+In earlier iterations (Phase 2), this project experimented with **Conditional Generative Adversarial Networks (cGANs)** using CelebA tensors. However, we have fully migrated to **Diffusion Models (FLUX / SDXL)** for the following reasons, which represent the current state-of-the-art in generative AI:
+
+| Feature | cGANs (Legacy Phase 2) | Diffusion Models (Current FLUX/SDXL) |
+|---------|-----------------------|--------------------------------------|
+| **Text-to-Image Alignment** | Poor. Required mapping text to rigid 40-dimensional binary vectors (e.g., `blond_hair=1`). | **Excellent.** Natively understands complex, nuanced natural language prompts. |
+| **Output Quality & Realism** | Often produced blurry, distorted, or heavily artifacted faces, especially on edge cases. | **Photorealistic.** Capable of high-frequency details, sharp pencil strokes, and studio-quality lighting. |
+| **Flexibility & Styles** | Locked to the style of the training dataset (e.g., CelebA photos). Very hard to force a "pencil sketch" style. | **Highly Versatile.** Easily swaps between "forensic pencil sketch," "charcoal," or "photorealistic" via prompt engineering. |
+| **Training & Fine-tuning** | Highly unstable to train (mode collapse). | **Stable & Extensible.** Easily fine-tuned with LoRA (e.g., on the CUFS dataset) without breaking the base model. |
+| **Handling "Missing" Data** | Required a strict binary guess for every feature, leading to hallucinated default faces. | **Graceful Fallback.** Only generates what is prompted, leaving the rest to the model's vast generalized latent space. |
+
+**Current Level:** Diffusion models like FLUX.1-schnell are currently at the bleeding edge of open-weight image generation, offering unparalleled prompt adherence and visual fidelity compared to previous GAN-based architectures.
+
+---
+
 ## Project structure
 
 ```
@@ -159,6 +175,12 @@ suspect-sketch-generator/
 │   ├── prompt_engineer.py  ← attrs → SDXL prompt, priority-ordered
 │   └── generation_pipeline.py  ← HF / Together / Pollinations backends
 │
+├── evaluation/
+│   ├── __init__.py
+│   ├── metrics.py          ← CLIP Score, SSIM, face confidence
+│   ├── cgan_generator.py   ← Lightweight cGAN baseline (64×64)
+│   └── results/            ← auto-generated benchmark output
+│
 ├── api/
 │   ├── __init__.py
 │   ├── api.py              ← FastAPI, /health /parse /generate
@@ -166,14 +188,47 @@ suspect-sketch-generator/
 │
 ├── ui/
 │   ├── __init__.py
-│   └── app.py              ← Streamlit frontend with seed persistence
+│   ├── app.py              ← Streamlit frontend with seed persistence
+│   └── compare.py          ← 🔬 Model Comparison tab (Diffusion vs cGAN)
 │
-└── tests/
-    ├── test_nlp_parser.py
-    ├── test_prompt_engineer.py
-    ├── test_bugfix_validate_faces.py
-    └── test_preservation_properties.py
+├── tests/
+│   ├── test_nlp_parser.py
+│   ├── test_prompt_engineer.py
+│   ├── test_bugfix_validate_faces.py
+│   └── test_preservation_properties.py
+│
+└── scripts/
+    ├── test_apis.py        ← end-to-end backend smoke test
+    └── run_comparison.py   ← CLI benchmark: Diffusion vs cGAN + metrics
 ```
+
+---
+
+## Model comparison: Diffusion vs cGAN
+
+The project includes a built-in comparative evaluation system that generates
+images from **both** a Diffusion model (FLUX) and a cGAN baseline, then scores
+both outputs with quantitative metrics.
+
+### Metrics used
+
+| Metric | What it measures | Score range |
+|--------|-----------------|-------------|
+| **CLIP Score** | Text-to-image alignment — does the image match the prompt? | 15–40 (higher ↑) |
+| **SSIM** | Structural similarity between the two outputs | 0–1 |
+| **Face Confidence** | MTCNN detection probability — is there a face at all? | 0–100% |
+
+### Run the comparison
+
+**In the UI (recommended):** Open the app and click the **🔬 Model Comparison** tab.
+
+**CLI benchmark:**
+```bash
+python scripts/run_comparison.py
+```
+This generates images from both models on 8 test descriptions, computes all
+metrics, prints a terminal table, and saves a JSON report to
+`evaluation/results/comparison_report.json`.
 
 ---
 
